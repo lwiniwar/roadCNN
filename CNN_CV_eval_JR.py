@@ -15,7 +15,7 @@ import tqdm
 from osgeo import gdal
 
 from gdal_dataloader import SplitRoadDataset
-from CNN_training import SegNet
+from SegNetModule import SegNet
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 

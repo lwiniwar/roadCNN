@@ -6,21 +6,20 @@ import tqdm
 import scipy.ndimage as simg
 gdal.UseExceptions()
 
-from torch.utils.data import IterableDataset, Dataset
+from torch.utils.data import Dataset
 
 eps = 1e-6
 
 
 class RoadDataset(Dataset):
-    def __init__(self, ids, data_vrt, label_vrt, polygon_file,
-                 cache=False, augmentation=True, overlap=32,
+    def __init__(self, data_vrt, label_vrt=None, polygon_file=None,
+                 augmentation=True, overlap=32,
                  k_split_approx=10, num_channels=3, min_road_pixels=10, dilate_iter=0,
                  minv=None, maxv=None):
         super(RoadDataset, self).__init__()
         self.dilate_iter = dilate_iter
         self.num_channels = num_channels
         self.augmentation = augmentation
-        self.cache = cache
         self.data_vrt = data_vrt
         self.label_vrt = label_vrt
 
@@ -155,8 +154,6 @@ class RoadDataset(Dataset):
         # worker = torch.utils.data.get_worker_info()
 
         dataset = gdal.Open(self.data_vrt, gdal.GA_ReadOnly)
-        labelset = gdal.Open(self.label_vrt, gdal.GA_ReadOnly)
-
         # load item
         data = np.empty((self.num_channels, self.size, self.size), dtype=float)
         for bandId in range(self.num_channels):
@@ -172,31 +169,36 @@ class RoadDataset(Dataset):
         # Data is normalized in [0, 1]
         # data = (data - self.minv) / (self.maxv - self.minv)
 
-        labelband = labelset.GetRasterBand(1)
-        label = labelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)#.transpose(2, 0, 1)
-        if self.dilate_iter > 0:
-            label = simg.binary_dilation(label, iterations=self.dilate_iter)
-        label = label.astype(np.long)
+        if self.label_vrt:
+            labelset = gdal.Open(self.label_vrt, gdal.GA_ReadOnly)
+            labelband = labelset.GetRasterBand(1)
+            label = labelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)#.transpose(2, 0, 1)
+            if self.dilate_iter > 0:
+                label = simg.binary_dilation(label, iterations=self.dilate_iter)
+            label = label.astype(np.long)
+        else:
+            label = None
+
         # Data augmentation (https://doi.org/10.1371/journal.pone.0235487.g003)
         if aug_id == 1:
             data = np.flip(data, axis=1)  # left-right-flip
-            label = np.flip(label, axis=0)
+            if label: label = np.flip(label, axis=0)
         elif aug_id == 2:
             data = np.rot90(np.flip(data, axis=1), axes=(1,2))  # left-right-flip, then 90 deg rot
-            label = np.rot90(np.flip(label, axis=0), axes=(0,1))
+            if label: label = np.rot90(np.flip(label, axis=0), axes=(0,1))
         elif aug_id == 3:
             data = np.flip(data, axis=2)  # up-down-flip
-            label = np.flip(label, axis=1)
+            if label: label = np.flip(label, axis=1)
         elif aug_id == 4:
             data = np.rot90(np.flip(data, axis=2), axes=(1,2))  # up-down-flip, then 90 deg rot
-            label = np.rot90(np.flip(label, axis=1), axes=(0,1))
+            if label: label = np.rot90(np.flip(label, axis=1), axes=(0,1))
         elif aug_id > 4:
             data = np.rot90(data, k=aug_id-4, axes=(1, 2))  # 90/180/270 deg rot
-            label = np.rot90(label, k=aug_id-4, axes=(0, 1))  # 90/180/270 deg rot
+            if label: label = np.rot90(label, k=aug_id-4, axes=(0, 1))  # 90/180/270 deg rot
 
         # Return the torch.Tensor values
         return (torch.from_numpy(data.copy()),
-                torch.from_numpy(label.copy()),
+                torch.from_numpy(label.copy()) if label else None,
                 (posx, posy))
 
     def write_results(self, res_array, target, nodata=-9999, dtype=gdal.GDT_Byte):
