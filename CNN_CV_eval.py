@@ -25,7 +25,7 @@ def get_vgg16_weights(path="./vgg16_bn-6c64b313.pth"):
         weights = URLopener().retrieve(vgg_url, path)
     return torch.load(path)
 
-def init_net(num_channels=3, load_vgg_weights=True):
+def create_net(num_channels=3, load_vgg_weights=True):
     net = SegNet(num_channels).double().to(device)
 
     if not load_vgg_weights:
@@ -243,7 +243,7 @@ if __name__ == '__main__':
 
 
         # re-init net
-        net = init_net(num_channels=3)
+        net = create_net(num_channels=3)
 
         print(f"Next Leave-P-Out run: Train on {train_set.iterate_sets}, test on full dataset")
 
@@ -254,7 +254,7 @@ if __name__ == '__main__':
         train(net, train_loader, weights=HP['weights'], base_lr=HP['base_lr'], out_folder=Path(f'./{run_name}'), epochs=HP['epochs'])
 
     if TEST:
-        net = init_net(num_channels=3, load_vgg_weights=False)
+        net = create_net(num_channels=3, load_vgg_weights=False)
         net.load_state_dict(torch.load(work_dir / rf"segnet128_final.pth"), strict=False)
 
         test_set = RoadDataset(work_dir / r"planet_data.tif",
