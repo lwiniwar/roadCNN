@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import torch.utils.data
 from osgeo import gdal, ogr
@@ -20,10 +22,10 @@ class RoadDataset(Dataset):
         self.dilate_iter = dilate_iter
         self.num_channels = num_channels
         self.augmentation = augmentation
-        self.data_vrt = data_vrt
-        self.label_vrt = label_vrt
+        self.data_vrt = str(data_vrt)
+        self.label_vrt = str(label_vrt) if label_vrt is not None else None
 
-        dataset = gdal.Open(data_vrt, gdal.GA_ReadOnly)
+        dataset = gdal.Open(self.data_vrt, gdal.GA_ReadOnly)
         # print("Calculating dataset statistics...")
         # stats = dataset.GetRasterBand(1).GetStatistics(0, 1)
         # print(f"Will normalize values from {stats[0]} - {stats[1]} to 0 - 1")
@@ -50,8 +52,12 @@ class RoadDataset(Dataset):
 
         channelset = gdal.Open(self.data_vrt, gdal.GA_ReadOnly)
         channelband = channelset.GetRasterBand(1)
-        labelset = gdal.Open(self.label_vrt, gdal.GA_ReadOnly)
-        labelband = labelset.GetRasterBand(1)
+        if self.label_vrt is not None:
+            labelset = gdal.Open(self.label_vrt, gdal.GA_ReadOnly)
+            labelband = labelset.GetRasterBand(1)
+        elif min_road_pixels > 0:
+            print(f"You requested to check for a minimum number of road pixels (n>{min_road_pixels}),"
+                  f"but have not supplied a reference raster file. Will skip the check and run on all tiles.")
 
         if polygon_file:
             poly = ogr.Open(polygon_file)
@@ -74,7 +80,7 @@ class RoadDataset(Dataset):
                     for boxid, box in enumerate(boxes):
                         if posx >= box[0] and posx < box[1] and posy >= box[2] and posy < box[3]:
                             # check if tile has no roads
-                            if np.count_nonzero(
+                            if self.label_vrt is None or np.count_nonzero(
                                     labelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)
                             ) > min_road_pixels:
                                 featpatch = channelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size,
@@ -84,6 +90,7 @@ class RoadDataset(Dataset):
                                     break
         else:
             print("Assuming raster is bbox aligned and has no nodata values (no aoi polygon supplied)")
+            sys.stdout.flush()
             for i in tqdm.tqdm(range(num_ds), desc="Checking input data", colour='#cbac54'):
                 xmul = i % self.num_x
                 ymul = i // self.num_x
@@ -92,9 +99,8 @@ class RoadDataset(Dataset):
                 for boxid, box in enumerate(boxes):
                     if posx >= box[0] and posx < box[1] and posy >= box[2] and posy < box[3]:
                         # check if tile has no roads
-                        labelpatch = labelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)
-                        if np.count_nonzero(
-                                labelpatch
+                        if self.label_vrt is None or np.count_nonzero(
+                                labelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)
                         ) > min_road_pixels:
 
                             featpatch = channelband.ReadAsArray(xoff=posx, yoff=posy, win_xsize=self.size, win_ysize=self.size)
@@ -198,7 +204,7 @@ class RoadDataset(Dataset):
 
         # Return the torch.Tensor values
         return (torch.from_numpy(data.copy()),
-                torch.from_numpy(label.copy()) if label else None,
+                torch.from_numpy(label.copy()) if label else torch.empty(()),
                 (posx, posy))
 
     def write_results(self, res_array, target, nodata=-9999, dtype=gdal.GDT_Byte):
@@ -215,11 +221,12 @@ class RoadDataset(Dataset):
 
 class SplitRoadDataset(RoadDataset):
     def __init__(self, iterate_sets=None, *args, **kwargs):
+        super(SplitRoadDataset, self).__init__(*args, **kwargs)
         if iterate_sets is None:
             self.iterate_sets = []
         else:
-            self.iterate_sets = iterate_sets
-        super(SplitRoadDataset, self).__init__(*args, **kwargs)
+            self.set_iterate_set(iterate_sets)
+
 
     def set_iterate_set(self, iterate_sets):
         self.iterate_sets = iterate_sets

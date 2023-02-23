@@ -14,7 +14,7 @@ from urllib.request import URLopener
 import tqdm
 from osgeo import gdal
 
-from gdal_dataloader import SplitRoadDataset
+from gdal_dataloader import SplitRoadDataset, RoadDataset
 from SegNetModule import SegNet
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -25,15 +25,11 @@ def get_vgg16_weights(path="./vgg16_bn-6c64b313.pth"):
         weights = URLopener().retrieve(vgg_url, path)
     return torch.load(path)
 
-def get_vgg19_weights(path="./vgg19_bn-c79401a0.pth"):
-    vgg_url = 'https://download.pytorch.org/models/vgg19_bn-c79401a0.pth'
-    if not os.path.isfile(path):
-        weights = URLopener().retrieve(vgg_url, path)
-    return torch.load(path)
-
-def init_net(num_channels=3):
+def init_net(num_channels=3, load_vgg_weights=True):
     net = SegNet(num_channels).double().to(device)
-    net = net.cuda()
+
+    if not load_vgg_weights:
+        return net
 
     # Download VGG-16 weights from PyTorch
     vgg16_weights = get_vgg16_weights()
@@ -83,20 +79,19 @@ def train(net, train_loader, weights, base_lr, out_folder, epochs):
             data, target = data.to(device, dtype=torch.double), target.to(device, dtype=torch.long)
             optimizer.zero_grad()
             output, o_softmax, o_argmax = net(data)
-            loss = F.cross_entropy(output, target, weights, reduction='mean')  # use softmax if we have raw MLP output
-            # loss = F.nll_loss(output, target, weights, reduction='mean')  # use nll loss if we have log probabilities (log_softmax output)
+            loss = F.cross_entropy(output, target, weights, reduction='mean')  # use cross-entropy if we have raw MLP output
+            # loss = F.nll_loss(o_softmax, target, weights, reduction='mean')  # use nll loss if we have log probabilities (log_softmax output)
+
             loss.backward()
             optimizer.step()
             losses.append(float(loss.data.cpu().numpy()))
 
-            # print('Train [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAccuracy: {}'.format(
-            #    batch_idx, len(train_loader),
-            #     100. * batch_idx / len(train_loader), loss.data, sklearn.metrics.accuracy_score(pred, gt)))
-
             mean_losses.append(np.mean(losses))
-            if batch_idx % 10 == 0: # and batch_idx > 0:
+            if batch_idx % 10 == 0:
                 plt.plot(losses, label='Loss')
                 plt.plot(mean_losses, label='Running mean (loss)')
+                plt.xlabel('Training batches')
+                plt.ylabel('Loss value')
                 plt.legend()
                 plt.savefig(out_folder / f'loss_ep{ep}_{batch_idx}.png')
                 plt.close()
@@ -128,7 +123,7 @@ def train(net, train_loader, weights, base_lr, out_folder, epochs):
 
     torch.save(net.state_dict(), out_folder / f'segnet128_final.pth')
 
-def test(net, test_loader, test_set, out_folder, merge_option='center'):
+def inference(net, test_loader, test_set, out_folder, merge_option='average'):
     if not isinstance(merge_option, list):
         merge_option = [merge_option]
     kernels = {}
@@ -144,13 +139,25 @@ def test(net, test_loader, test_set, out_folder, merge_option='center'):
             kernel[:test_set.size // 2, test_set.size // 2:] = np.flipud(weights)
             kernel[test_set.size // 2:, test_set.size // 2:] = weights
             kernel = (np.max(kernel) - kernel) / np.max(kernel)
+        elif mo == 'flatroof':
+            kernel = np.zeros((test_set.size, test_set.size))
+            weights = np.indices((test_set.size // 2 , test_set.size // 2))
+            weights = np.linalg.norm(weights, axis=0)
+            kernel[:test_set.size // 2, :test_set.size // 2] = np.fliplr(np.flipud(weights))
+            kernel[test_set.size // 2:, :test_set.size // 2] = np.fliplr(weights)
+            kernel[:test_set.size // 2, test_set.size // 2:] = np.flipud(weights)
+            kernel[test_set.size // 2:, test_set.size // 2:] = weights
+            kernel[kernel < test_set.size / 4] = test_set.size / 4
+            kernel = (np.max(kernel) - kernel) / np.max(kernel)
         elif mo == 'gaussian':
             from scipy import signal
             gkern1d = signal.gaussian(test_set.size, std=test_set.size // 4).reshape(test_set.size, 1)
             kernel = np.outer(gkern1d, gkern1d)
         elif mo == 'average':
             kernel = np.ones((test_set.size, test_set.size))
-        kernels[mo] = kernel
+        else:
+            raise NotImplementedError(f"Unknown merge option: '{mo}'.")
+        kernels[mo] = kernel + 0.0001  # small epsilon to avoid div by zero
 
     net.eval()
 
@@ -160,7 +167,8 @@ def test(net, test_loader, test_set, out_folder, merge_option='center'):
     for mo in merge_option:
         out_matrs[mo] = np.zeros((test_set.xsize, test_set.ysize), int)
         out_probs[mo] = np.zeros((test_set.xsize, test_set.ysize), float)
-        out_weights[mo] = np.zeros((test_set.xsize, test_set.ysize), float)
+        if mo != 'center':
+            out_weights[mo] = np.zeros((test_set.xsize, test_set.ysize), float)
 
     for batch_idx, (data, target, loc) in enumerate(tqdm.tqdm(test_loader, colour='#16a349',
                                                               desc='Test in progress                 ')):
@@ -169,147 +177,99 @@ def test(net, test_loader, test_set, out_folder, merge_option='center'):
         out_softmax = out_softmax.detach().cpu().numpy()
         out_class = out_class.detach().cpu().numpy()
         for batch in range(out_class.shape[0]):
-            if 'center' in mo:
-                xstart = loc[0][batch].cpu().numpy() + test_set.size//4
-                ystart = loc[1][batch].cpu().numpy() + test_set.size//4
-                out_matrs['center'][xstart:xstart + test_set.size//2,
-                ystart:ystart + test_set.size//2] = out_class[test_set.size//4:3*test_set.size//4,
-                                                    test_set.size//4:3*test_set.size//4].T
-                out_probs['center'][xstart:xstart + test_set.size//2,
-                ystart:ystart + test_set.size//2] = out_softmax[batch, test_set.size//4:3*test_set.size//4,
-                                                    test_set.size//4:3*test_set.size//4].T
-            else:
-                for mo, kernel in kernels.items():
+            for mo, kernel in kernels.items():
+                if mo == 'center':
+                    xstart = loc[0][batch].cpu().numpy() + test_set.size//4
+                    ystart = loc[1][batch].cpu().numpy() + test_set.size//4
+                    out_matrs['center'][xstart:xstart + test_set.size//2,
+                    ystart:ystart + test_set.size//2] = out_class[batch, test_set.size//4:3*test_set.size//4,
+                                                        test_set.size//4:3*test_set.size//4].T
+                    out_probs['center'][xstart:xstart + test_set.size//2,
+                    ystart:ystart + test_set.size//2] = out_softmax[batch, 1, test_set.size//4:3*test_set.size//4,
+                                                        test_set.size//4:3*test_set.size//4].T
+                else:
                     xstart = loc[0][batch].cpu().numpy()
                     ystart = loc[1][batch].cpu().numpy()
                     out_probs[mo][xstart:xstart + test_set.size,
                     ystart:ystart + test_set.size] += out_softmax[batch, 1, ...].T * kernel
                     out_weights[mo][xstart:xstart + test_set.size,
                     ystart:ystart + test_set.size] += kernel
+
     for mo in merge_option:
-        if merge_option != 'center':
+        if mo != 'center':
             out_probs[mo] = out_probs[mo] / out_weights[mo]
             out_matrs[mo] = (out_probs[mo] > 0.5).astype(int)
 
-            # if False:
-            #     fig = plt.figure(figsize=(7, 3.5), constrained_layout=True)
-            #     spec = fig.add_gridspec(ncols=2, nrows=1)
-            #     ax0 = fig.add_subplot(spec[0, 0])
-            #     ax0.imshow(data.cpu().numpy()[batch, ...].transpose(1, 2, 0))
-            #     ax1 = fig.add_subplot(spec[0, 1])
-            #     im = ax1.imshow(diffmatrix, vmin=0, vmax=3)
-            #
-            #     colors = [im.cmap(im.norm(value)) for value in [0, 1, 2, 3]]
-            #     labels = ["No road (TN)", "Err. of commission (FP)", "Err. of ommission (FN)", "Correct pred. (TP)"]
-            #     # create a patch (proxy artist) for every color
-            #     patches = [mpatches.Patch(color=colors[i], label=labels[i]) for i in
-            #                range(len(colors))]
-            #     # put those patched as legend-handles into the legend
-            #     plt.legend(handles=patches, bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-            #
-            #     plt.show()
     if out_folder is not None:
+        if not out_folder.is_dir():
+            out_folder.mkdir()
         for mo in merge_option:
             test_set.write_results(out_matrs[mo].T, str(out_folder / fr"test_pred_{mo}.tif"))
             test_set.write_results(out_probs[mo].T, str(out_folder / fr"test_prob_{mo}.tif"), dtype=gdal.GDT_Float32)
     return out_matrs
 
 def run_single_train_test(train_set, test_set, net, HP, out_folder):
-    WEIGHTS = torch.tensor([0.05, 0.95])
-    # WEIGHTS = torch.tensor([1., 1.])
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=HP['batch_size'], shuffle=True, pin_memory=True, num_workers=5)
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=HP['batch_size'], shuffle=True, pin_memory=True, num_workers=5)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=HP['batch_size'],
+                                               shuffle=True, pin_memory=True, num_workers=5)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=HP['batch_size'],
+                                              shuffle=False, pin_memory=True, num_workers=5)
 
     base_lr = HP['base_lr']
-    train(net, train_loader, weights=WEIGHTS, base_lr=base_lr, out_folder=out_folder, epochs=HP['epochs'])
-    test(net, test_loader, test_set, out_folder)
+    train(net, train_loader, weights=HP['weights'], base_lr=base_lr, out_folder=out_folder, epochs=HP['epochs'])
+    inference(net, test_loader, test_set, out_folder)
 
 if __name__ == '__main__':
-    from sklearn.model_selection import LeavePOut
-    import copy
-
     HP = {
         "epochs": 3,
         "base_lr": 0.0001,
-        # "base_lr": 0.01,
-        "batch_size": 16
+        "batch_size": 16,
+        'weights': torch.tensor([0.05, 0.95])
     }
+    work_dir = Path(r"C:\Users\Lukas\Documents\Data\road-cnn-small\demo_inference")
+    run_name = 'experiment1'
 
-    # train_set = SplitRoadDataset([], [], r"E:\Data\lwiniwar\aoi_rasters\ps-tile.tif", r"E:\Data\lwiniwar\aoi_rasters\ps-tile_label.tif", False,
-    #                              cache=False, augmentation=True, overlap=32, k_split_approx=10)
-    # train_set = SplitRoadDataset([], [], r"E:\Data\lwiniwar\planet_2020\L15-0319E-1407N.tif", r"E:\Data\lwiniwar\planet_2020_label\L15-0319E-1407N.tif", False,
-    #                                cache=False, augmentation=True, overlap=32, k_split_approx=10)
-    # train_set = SplitRoadDataset([], [],
-    #                              r"E:\Data\lwiniwar\aoi_rasters\ps-2021.tif",
-    #                              r"E:\Data\lwiniwar\aoi_rasters\ps-2021_label.tif",
-    #                              r"E:\Data\lwiniwar\aoi\central_aoi_north.shp",
-    #                                cache=False, augmentation=True, overlap=32, k_split_approx=10, num_channels=3)
-    # train_set = SplitRoadDataset([], [],
-    #                              r"E:\Data\lwiniwar\aoi_rasters\re-tile.tif",
-    #                              r"E:\Data\lwiniwar\aoi_rasters\re-tile_label.tif",
-    #                              None,
-    #                              # r"E:\Data\lwiniwar\aoi\central_aoi_north.shp",
-    #                                cache=False, augmentation=True, overlap=32, k_split_approx=10, num_channels=3, min_road_pixels=-1)
+    TRAIN = False
+    TEST = True
 
 
-    train_set = SplitRoadDataset([], [],
-                                 r"E:\Data\lwiniwar\aoi_rasters\ps-tile.tif",
-                                 r"E:\Data\lwiniwar\aoi_rasters\ps_label_notrails.tif",
-                                 None,
-                                 # r"E:\Data\lwiniwar\aoi\central_aoi_north.shp",
-                                   cache=False, augmentation=True, overlap=112, k_split_approx=10, num_channels=3,
-                                 min_road_pixels=10, dilate_iter=1,
-                                 minv=[49, 155, 157, 1017], maxv=[961, 1181, 1316, 4189])
-    # perc_train = 80
-    # kf = LeavePOut(p=int((100-perc_train) / 100 * train_set.num_k))
-
-
-    # for LpOidx, (train_index, test_index) in enumerate(kf.split(range(train_set.num_k))):
-    if True:
-        LpOidx = 0
-        train_index = [1,2,3,4,5,6,8,9]
-        test_index = [0,7]
-        test_index = [0,1,2,3,4,5,6,7,8,9]
-        # re-init net
-        net = init_net(num_channels=3)
-        train_set.set_iterate_set(train_index)
-
-        print(f"Next Leave-P-Out run: Train on {train_index}, test on {test_index}")
-        run_name = 'res20230201_lr_1e-4'
-        # run_name = 'res20230209_lr_1e-4_RGBI'
-
-        # net.load_state_dict(torch.load(rf"{run_name}\CV{LpOidx:02d}\segnet128_ep0.pth"), strict=True)
-
-        WEIGHTS = torch.tensor([0.05, 0.95])
-        # WEIGHTS = torch.tensor([1., 1.])
-        # train_loader = torch.utils.data.DataLoader(train_set, batch_size=HP['batch_size'], shuffle=True,
-        #                                            pin_memory=True, num_workers=5)
-        # train(net, train_loader, weights=WEIGHTS, base_lr=HP['base_lr'], out_folder=Path(f'./{run_name}/CV{LpOidx:02d}'), epochs=HP['epochs'])
-
-
-
-        net.load_state_dict(torch.load(rf"{run_name}\CV{LpOidx:02d}\segnet128_final.pth"), strict=False)
-
-        test_set = SplitRoadDataset([], [],
+    if TRAIN:
+        train_set = SplitRoadDataset([1,2,3,4,5,6,8,9],
                                      r"E:\Data\lwiniwar\aoi_rasters\ps-tile.tif",
                                      r"E:\Data\lwiniwar\aoi_rasters\ps_label_notrails.tif",
                                      None,
-                                     # r"E:\Data\lwiniwar\aoi\central_aoi_north.shp",
-                                     cache=False, augmentation=False, overlap=112, k_split_approx=10, num_channels=3,
-                                     min_road_pixels=-1, dilate_iter=1,
-                                     minv=[49, 155, 157], maxv=[961, 1181, 1316])
+                                     augmentation=True, overlap=112, k_split_approx=10, num_channels=3,
+                                     min_road_pixels=10, dilate_iter=1,
+                                     minv=[49, 155, 157, 1017], maxv=[961, 1181, 1316, 4189])
 
-        test_set.set_iterate_set(test_index)
+
+        # re-init net
+        net = init_net(num_channels=3)
+
+        print(f"Next Leave-P-Out run: Train on {train_set.iterate_sets}, test on full dataset")
+
+        # uncomment to continue training from a saved checkpoint
+        # net.load_state_dict(torch.load(work_dir / rf"{run_name}\segnet128_ep0.pth"), strict=True)
+        train_loader = torch.utils.data.DataLoader(train_set, batch_size=HP['batch_size'], shuffle=True,
+                                                   pin_memory=True, num_workers=5)
+        train(net, train_loader, weights=HP['weights'], base_lr=HP['base_lr'], out_folder=Path(f'./{run_name}'), epochs=HP['epochs'])
+
+    if TEST:
+        net = init_net(num_channels=3, load_vgg_weights=False)
+        net.load_state_dict(torch.load(work_dir / rf"segnet128_final.pth"), strict=False)
+
+        test_set = RoadDataset(work_dir / r"planet_data.tif",
+                               None,  # no reference labels
+                               None,  # no AOI
+                               augmentation=False, overlap=112, num_channels=3,
+                               min_road_pixels=-1,
+                               minv=[49, 155, 157, 1017], maxv=[961, 1181, 1316, 4189])
+
         test_loader = torch.utils.data.DataLoader(test_set, batch_size=HP['batch_size'], shuffle=False, pin_memory=True, num_workers=5)
 
-        test(net, test_loader, test_set, Path(f'./{run_name}/CV{LpOidx:02d}'),
-             merge_option=['gaussian'])
-        test(net, test_loader, test_set, Path(f'./{run_name}/CV{LpOidx:02d}'),
-             merge_option=['average'])
-        test(net, test_loader, test_set, Path(f'./{run_name}/CV{LpOidx:02d}'),
-             merge_option=['linear'])
 
-        test(net, test_loader, test_set, Path(f'./{run_name}/CV{LpOidx:02d}'),
-             merge_option=['center'])
+        inference(net, test_loader, test_set, work_dir / f'{run_name}',
+                  merge_option=['flatroof', 'gaussian','average','linear'])
+        inference(net, test_loader, test_set, work_dir / f'{run_name}',
+                  merge_option=['center'])
 
 
