@@ -104,6 +104,11 @@ class SegNet(nn.Module):
         self.apply(self.weight_init)
 
     def forward(self, x):
+        """
+        Forward pass through SegNet.
+        :param x: The input image (B, 3, H, W)
+        :return: tuple of (raw predictions (B, 2, H, W), softmax result (B, 2, H, W), class prediction (B, H, W))
+        """
         # print(x.shape)
         # Encoder block 1
         x = self.conv1_1_bn(F.relu(self.conv1_1(x)))
