@@ -20,6 +20,7 @@ UBC Okanagan
 > road dataset is given along with satellite imagery.
 
 > Note: Please see the accompanying project report for more information on the algorithms, the results and discussion.
+> A pdf version of that project report is available [here](Report%20-%20CNN%20Extraction%20of%20Forest%20Road%20Information.pdf).
 
 ## Introduction
 
@@ -563,6 +564,81 @@ to run for larger datasets (typically less than 1h). The output may look somethi
 any GIS system:
 
 ![img_11.png](img_11.png)
+
+## Discussion
+The CNN-based road extraction approach developed in this study and trained on Planetscope 
+imagery, achieved reasonably high performance on both the paved and unpaved rural roads 
+typical of the boreal regions of Canada. Recall, Precision and F1 quality metrics were 
+comparable to studies using higher resolution imagery, such as Rapideye, to extract paved
+roads across much smaller areas using deep learning (e.g., 
+[Gao et al., 2019](https://doi.org/10.3390/rs11050552); 
+[Xu et al., 2018](https://doi.org/10.3390/rs10091461))
+and other approaches (e.g., 
+[Miao et al., 2015](https://doi.org/10.1109/JSTARS.2015.2443552); 
+[Zhou et al., 2019](https://doi.org/10.3390/rs11010079)). A key benefit of using data
+from CubeSats, such as PlanetScope, is a high spatial and temporal resolution. While PlanetScope
+imagery is typically available at daily or near-daily timesteps, clouds and cloud shadows
+increase the revisit period which can, in cloudy areas, exceed a number of weeks (Keay et al., 2022).
+In most cases this delayed temporal resolution is unlikely to cause issues, as the updating of road
+information is unlikely to occur more often than a few times per year. PlanetScope data products use
+anomalous brightness values to detect clouds. However, recently constructed roads with little remaining
+vegetation will also have anomalous brightness values and may be misclassified as cloud, thereby reducing the
+number of valid pixels from which to detect a change. With improvements in the UDM2 product and addition of new
+spectral bands to PlanetScope satellites, this misclassification of clouds may be reduced 
+([Keay et al., 2022]()).
+In addition, while users can download PlanetScope scenes with a daily temporal revisit, Planet now offers image
+composites at coarser temporal resolutions (e.g., biweekly or monthly), which typically have lower cloud cover
+than that of the average scene over a given area. 
+
+A key benefit of the approach used in this study is the use of a pre-existing training set with which to build
+the initial CNN model.  The use of deep learning algorithms such as CNN has expanded greatly within the past 5 years
+and advances in computing power and the ability to apply deep learning algorithms in a spatial context allows users
+previously unable to utilise the power of CNN, to now be able to do so. Roads are difficult objects to classify due 
+to their spectral similarity to other high albedo objects such as bare soil and rock, and their morphological similarity
+to other linear features such as rivers and pipelines making a CNN approach logical to apply.
+
+Another key outcome of the methods developed in this paper is the development of a fully connected road network,
+rather than separate, discrete, road segments. Even after post-processing, a pixel-based road extraction approach
+can be difficult to convert into a fully connected vectorized road network for navigation (
+[Xu et al., 2018](https://doi.org/10.3390/rs10091461)
+). The
+approach, developed by 
+Rousell et al. (2023, submitted)
+and applied here, allows the detected road segments to be connected in a 
+vector dataset to ensure a topologically correct road network, which is required for most applications such as road
+planning, and conservation and needed in order to ingest this road information into existing vector databases.
+
+Lastly our analysis indicates how long-term archival satellite data can be used to determine the age of forest 
+roads in northern British Columbia using time series of spectral indices and annual Landsat best-available pixel 
+image composites. The road age results produced from the NDVI and NBR time series are comparable, with minor variations
+year to year. Both methods, however, result in road segments along a road to fluctuate in age. This fluctuation in age
+is in part attributed to road segments within Landsat pixels being too small or affected by spectral noises from 
+background land cover, resulting in no changes being detected. To account for this, future work will incorporate a
+minimum change detection threshold. 
+
+Up-to-date information on the rural road network is critical for the management of threatened and endangered species
+and is becoming a critical piece of information to aid in conservation activities. In British Columbia, with increasing
+levels of disturbance due to insect infestation, harvest, fire as well as ongoing anthropogenic disturbances associated
+with exploration and mining, the density of roads across the region remains of paramount concern. Quantifying the
+density of the road network within individual caribou herd ranges is one metric that can provide some context to how
+much activity may be occurring within each of these caribou herd ranges. This idea is similar to that undertaken with 
+the management of the grizzly bear in Alberta where the Albertian provincial government recommended road densities below 
+certain thresholds to encourage recovery of the species. While these thresholds are important, it is therefore critical
+that spatial coverages showing the extent of the road coverage are accurate and complete which is often not the case in 
+remote areas. The technique presented here to detect roads from high spatial resolution Planet imagery, and then provide 
+an indication as to their age from historic Landsat imagery, provides approaches where an accurate road network can be
+built. In addition, the ability to vectorized these predictions to produce a linked road network, whilst in its infancy,
+is the critical final step in ensuring these layers can then effectively be used for management.
+
+Looking to the future, for the management potential of these types of technologies, one possible strategy would be to 
+integrate GNSS data acquired from in vehicle loggers, which map the use of the landscape by vehicles, combined with 
+geospatial coverages from satellite data such as demonstrated here could result in a database of both accurate road 
+location information but also use. Information on the speed and diurnal use of roads could also be extracted from these
+databases to provide a comprehensive analysis of the road infrastructure in an area. Whilst these types of databases are
+starting to be developed within the forest industry using GNSS receivers on harvesting operations, there broader use in 
+a conservation setting has not yet been fully examined and may provide additional insights into road networks 
+particularly for endangered species.
+
 
 ## Conclusion
 
