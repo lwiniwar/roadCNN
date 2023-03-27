@@ -175,6 +175,7 @@ def main(ref_file, pred_file, iterations=5,
         print(f"\tPrecision : {precision*100:.3f} %")
         print(f"\tRecall    : {recall*100:.3f} %")
         print(f"\tF1 Score  : {F1*100:.3f} %")
+        print(f"\tTP, TN, FP, FN  : {TP:.3f}, {TN:.3f}, {FP:.3f}, {FN:.3f}")
         return accuracy, precision, recall, F1, out_data
     except Exception as e:
         print("Error:")
@@ -182,7 +183,7 @@ def main(ref_file, pred_file, iterations=5,
 
 
 
-if __name__ == '__main__' and False:
+if __name__ == '__main__':
     mixers = [
         r"C:\Users\Lukas\Documents\Data\road-cnn-small\20230203\test_pred_gaussian.tif"
         # r"C:\Users\Lukas\Documents\Data\road-cnn-small\test_pred.tif",
@@ -192,9 +193,9 @@ if __name__ == '__main__' and False:
     ]
     for mix in mixers:
         main(r"C:\Users\Lukas\Documents\Data\road-cnn-small\ref_ps_filtered.tif",
-             mix, 5)
+             mix, 15)
 
-if __name__ == '__main__':
+if __name__ == '__main__' and False:
     accuracies = []
     precisions = []
     recalls = []

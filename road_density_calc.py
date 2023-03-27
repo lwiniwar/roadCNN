@@ -71,19 +71,25 @@ def write_raster(array, envelope, output_file):
     :return: The output_file
     :doc-author: Trelent
     """
-    x_min, y_min, x_max, y_max = envelope
+    x_min, x_max, y_min, y_max = envelope
     rows, cols = array.shape
-    x_res = (x_max - x_min) / cols
-    y_res = (y_max - y_min) / rows
+    x_res = (x_max - x_min) / rows
+    y_res = (y_max - y_min) / cols
 
     driver = gdal.GetDriverByName("GTiff")
-    out_raster = driver.Create(output_file, cols, rows, 1, gdal.GDT_Float32)
+    out_raster = driver.Create(output_file, rows,cols, 1, gdal.GDT_Float32)
     out_raster.SetGeoTransform((x_min, x_res, 0, y_max, 0, -y_res))
     out_band = out_raster.GetRasterBand(1)
-    out_band.WriteArray(array)
+    out_band.WriteArray(np.flipud(array.T))
     out_raster.FlushCache()
 
 def main(args):
+    """
+    Function to create a road density map
+    :param args: list. Element 0: input vector dataset. Element 1: pixel size for the output map. Element 2: search
+    radius for the density calculation. Element 3: output path.
+    :return: None
+    """
     road_file = args[0]
     pixel_size = float(args[1])
     file = ogr.Open(road_file)
@@ -110,7 +116,7 @@ def main(args):
     xlocs = np.arange(tot_xmin, tot_xmax, pixel_size)
     ylocs = np.arange(tot_ymin, tot_ymax, pixel_size)
 
-    zz = get_density_moving_circle(all_roads, (xlocs, ylocs), 5000, rtree_index)
+    zz = get_density_moving_circle(all_roads, (xlocs, ylocs), float(args[2]), rtree_index)
 
     import matplotlib.pyplot as plt
     plt.figure(figsize=(10, 10))
@@ -118,12 +124,15 @@ def main(args):
     plt.colorbar()
     plt.axis('equal')
     plt.show()
-    write_raster(zz, (tot_xmin, tot_xmax, tot_ymin, tot_ymax), "density_test.tif")
+    write_raster(zz, (tot_xmin, tot_xmax, tot_ymin, tot_ymax), args[3])
 
 
 if __name__ == '__main__':
     main([
-        # r"C:\Users\Lukas\Documents\Data\road-cnn-small\cleaned roads\tile7\tile7 roads cleaned.shp",
-        r"C:\Users\Lukas\Documents\Data\road-cnn-small\20230206\tile7_res1_new3.shp",
-        100.0
+        r"C:\Users\Lukas\Documents\Data\road-cnn-small\cleaned roads\tile7\tile7 roads cleaned_NAD83UTM10N.shp",
+        # r"C:\Users\Lukas\Documents\Data\road-cnn-small\20230206\tile7_res1_new3.shp",
+        25.0,
+        2000,
+        'density_ref.tif'
+        # 'density_test.tif'
     ])

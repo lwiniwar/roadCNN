@@ -1,21 +1,25 @@
-# CNN Road Extraction in Northern B.C.
+# Extraction of Forest Road Information from CubeSat Imagery using CNNs
 
-## Project Report
+## Project report and code instructions
 
-*Lukas Winiwarter, Nicholas C. Coops*
+*Lukas Winiwarter, Nicholas C. Coops, Alex Bastyr, Daisy Zhao*
 
 IRSS, UBC Vancouver
+
+2424 Main Mall, Vancouver, BC, V6T 1Z4, Canada.
 
 *Adam Ford*
 
 UBC Okanagan
 
-**Version 2023-02**
+**Version 2023-03-31**
 
 > Note: This documents acts as an introduction to the method of road detection that was developed within the project.
 > Here, we combine background information and runnable `Python` code. By running this embedded code, it is possible
 > to either run inference using a provided pre-trained model on new data, or to train a new model provided a reference
 > road dataset is given along with satellite imagery.
+
+> Note: Please see the accompanying project report for more information on the algorithms, the results and discussion.
 
 ## Introduction
 
@@ -45,8 +49,8 @@ pixel of the input images. The network thereby considers spatial neighbours on m
 Evaluation of the classifier's performance is carried out using a buffering approach, which allows for varying road widths
 and to consider spatial misalignment or inaccuracies in the digitization. Finally, the raster probabilities are
 converted to a vectorized dataset which allows further analyses to be carried out. In this document, we show (a) how 
-road density can be calculated, (b) how large undisturbed areas can be identified, and (c) a method to identify critical
-junctions/access into watersheds that could potentially improve caribou habitability.
+a CNN can be used to derive roads, (b) how these roads can be vectorized, and (c) how a road density layer can be calculated
+from these maps.
 
 ## Installation and package requirements
 
@@ -73,7 +77,7 @@ While not strictly required, it is highly recommended to utilize the GPU.
 
 For the preparation of the reference dataset and the seeds for the vectorization we use [QGIS](https://qgis.org/en/site/forusers/download.html).
 
-In the road vectorization step, we use `vecnet` ([Roussel et al., 2022](https://doi.org/10.1016/j.jag.2022.103020)). This is implemented in an [R](https://www.r-project.org/) package, which can be installed as such:
+In the road vectorization step, we use `vecnet` (Roussel et al., 2023, submitted). This is implemented in an [R](https://www.r-project.org/) package, which can be installed as such:
 ```R
 install.packages('remotes', 'terra', 'sf')
 remotes::install_github("Jean-Romain/vecnet")
@@ -383,11 +387,14 @@ Here, we also specified the option `'gaussian'` for merging the overlapping tile
 
 ## Analysis of results
 
-The results were analysed on two different, spatially separated test and validation datasets. Figure ?? shows the location 
-of these subsets in the area of interest. For these two areas, manual editing was carried out to get a more realistic
+The results were analysed on two different, spatially separated test and validation datasets. The figure below shows the location 
+of these subsets in the area of interest, where ID 0 was used for validation and ID 7 for testing. The other rectangular areas were employed as training data .
+The red polygons show the ranges of Caribou herds in B.C. For the test- and validation area, manual editing was carried out to get a more realistic
 account of roads that are detectable from satellite imagery. The human operator was given the same input imagery as
 the neural network, and checked the existing road layer for consistency with the images, removing or adding road segments
 as required.
+
+![img_10.png](img_10.png)
 
 The road network was then again rasterized, and a raster-based comparison was carried out. Each pixel was assigned to one
 of the classes
@@ -476,8 +483,8 @@ binary road predictions, but may cover a larger area than the prediction.
 ## Post-processing
 
 While the binary road raster can be used for evaluation of the classification performance, its use for further processing
-is limited. We therefore derive a topologically intact vector road network using the approach presented by [Roussel
-et al. (2022)](https://doi.org/10.1016/j.jag.2022.103020). 
+is limited. We therefore derive a topologically intact vector road network using the approach presented by Roussel
+et al. (2023, submitted).
 
 The input to this algorithm is a probability map as well as starting road segments.
 We use the existing road network layer we used for training/test, explode it into individual line segments, 
@@ -504,11 +511,11 @@ library(sf)
 library(vecnet)
 seeds <- st_read("seeds.shp") |> st_geometry()
 map <- rast("prob_gaussian.tif")
-res <- vectorize_network(map, seeds, min_conductivity=0.2, display=TRUE, threshold=0.03)
+res <- vectorize_network(map, seeds, min_conductivity=0.15, display=TRUE, threshold=0.03)
 st_write(res, "result_roads.shp", append=FALSE)
 ```
 
-The following parameters (selection) can to be set for the road extraction:
+The following parameters (selection) can be set for the road extraction:
 
 - Minimum conductivity (`min_conductivity`)
 - Threshold (`threshold`)
@@ -522,18 +529,47 @@ a live view of the extracted roads will be shown as a plot, which may look like 
 ![img_8.png](img_8.png)
 
 The resulting vectorized road network can be used to compute accessibility metrics, navigation, or simply act as an 
-update to the existing road data. 
+update to the existing road data.
 
-## Discussion
+### Large scenes
+In order to process the whole scene, the dataset had to be processed in parts. 
+The CNN predictions were run separately for the individual parts. As the input data files
+overlapped, a full coverage of the area of interest was ensured.
 
-TBD
+In QGIS, the provided processing workflows can be executed "as a batch process", which allows 
+to run the same method on multiple input/output files:
+![img_9.png](img_9.png)
+
+For the road extraction, the R-Script to run the vectorization was adapated to go through
+the files in a loop, resulting in a number of road network files. To merge these files,
+the "merge vector layers" function in QGIS was used.
+
+## Density calculation
+To present the data as a road network density map, the python script `road_density_calc.py` can be used. To run it,
+import the file and run the `main`-Function:
+
+```python
+import road_density_calc
+road_density_calc.main(
+   r'path/to/input/file.shp',  # input vector file
+   15,  # pixel size of the output map in [m]
+   2000,   # search radius for the density calculation,
+   r'path/to/output/file.tif'  # path to output raster file
+)
+```
+
+The calculation makes use of a spatial index (R-tree) built on the input vector dataset, but may still take some time
+to run for larger datasets (typically less than 1h). The output may look something like this and can be visualized in 
+any GIS system:
+
+![img_11.png](img_11.png)
 
 ## Conclusion
 
 We successfully used a pre-trained convolutional neural network as encoder for a SegNet-based road detector on satellite
 imagery data. While the use of the pre-trained weights meant that the architecture of the network was fixed, training
 convergence could be achieved much faster than when using random initialization. Overall, the road detection with 
-post-processing resulted in an accuracy of ??, with precision and recall values of ?? and ??, respectively. In comparison
+post-processing resulted in an accuracy of 99.1%, with precision and recall values of 76.1% and 91.2%, respectively. In comparison
 to existing datasets, including ones that were derived from satellite imagery using CNNs, our method delivers a better
 picture of the road network, since we focus on _forest roads_ specifically. 
 
