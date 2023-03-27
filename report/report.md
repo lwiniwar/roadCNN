@@ -138,6 +138,8 @@ Subsequent calls to `__getitem__` (as e.g. done when using a `torch.DataLoader`)
 
 ### Example code
 
+> Note: Example data and a trained model are available as [a release on the GitHub repository](https://github.com/lwiniwar/roadCNN/releases)
+
 The following snippet loads a raster dataset with multiple bands and one (binary) label into a `SplitRoadDataset`:
 
 ```python
